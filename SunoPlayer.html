@@ -313,7 +313,7 @@
             </div>
 
             <!-- The Render Sandbox Frame -->
-            <iframe id="preview-frame" sandbox="allow-scripts allow-same-origin allow-popups allow-forms allow-presentation" class="w-full h-full border-0 bg-[#FAF5E9]"></iframe>
+            <iframe id="preview-frame" sandbox="allow-scripts allow-forms allow-popups allow-modals" class="w-full h-full border-0 bg-[#FAF5E9]"></iframe>
           </div>
 
         </div>
@@ -678,6 +678,27 @@
       deviceMode: 'desktop'
     };
 
+    // UTF-8 safe base64 encoding/decoding helpers
+    function safeBtoa(str) {
+      try {
+        return btoa(encodeURIComponent(str).replace(/%([0-9A-F]{2})/g, (match, p1) => {
+          return String.fromCharCode(parseInt(p1, 16));
+        }));
+      } catch (e) {
+        return btoa(str);
+      }
+    }
+
+    function safeAtob(str) {
+      try {
+        return decodeURIComponent(Array.prototype.map.call(atob(str), (c) => {
+          return '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2);
+        }).join(''));
+      } catch (e) {
+        return atob(str);
+      }
+    }
+
     // DOM Elements
     const codeInput = document.getElementById('code-input');
     const snippetTitleInput = document.getElementById('snippet-title');
@@ -700,27 +721,29 @@
 
     // Initialize application
     window.addEventListener('DOMContentLoaded', () => {
-      lucide.createIcons();
+      if (window.lucide) {
+        lucide.createIcons();
+      }
       loadLibraryFromStorage();
 
-      // Check URL hash for shared code payload
-      const hash = window.location.hash;
-      if (hash && hash.startsWith('#data=')) {
-        try {
+      // Check URL hash for shared code payload safely
+      try {
+        const hash = window.location.hash;
+        if (hash && hash.startsWith('#data=')) {
           const raw = hash.replace('#data=', '');
-          const decoded = decodeURIComponent(escape(atob(raw)));
+          const decoded = safeAtob(raw);
           const parsed = JSON.parse(decoded);
-          state.code = parsed.code || '';
+          state.code = parsed.code || TEMPLATES.artCard;
           state.title = parsed.title || 'Shared Motif';
           state.tags = parsed.tags || 'shared';
           snippetTitleInput.value = state.title;
           snippetTagsInput.value = state.tags;
           showToast('Decoded shared motif from URL!', 'success');
-        } catch (e) {
-          console.warn('Could not parse hash payload:', e);
+        } else {
           state.code = TEMPLATES.artCard;
         }
-      } else {
+      } catch (e) {
+        console.warn('Could not parse hash payload:', e);
         state.code = TEMPLATES.artCard;
       }
 
@@ -729,7 +752,7 @@
       setupEventListeners();
     });
 
-    // Update Preview Iframe
+    // Update Preview Iframe via srcdoc (resilient across HTTPS static hosting)
     function updateEditorAndPreview() {
       state.code = codeInput.value;
       state.title = snippetTitleInput.value.trim() || 'Untitled Motif';
@@ -737,38 +760,36 @@
 
       charCounter.innerText = `${state.code.length.toLocaleString()} characters`;
 
-      const doc = previewFrame.contentDocument || previewFrame.contentWindow.document;
-      doc.open();
-      doc.write(`
-        <!DOCTYPE html>
-        <html>
-        <head>
-          <meta charset="utf-8">
-          <meta name="viewport" content="width=device-width, initial-scale=1.0">
-          <style>
-            body {
-              margin: 0;
-              padding: 20px;
-              box-sizing: border-box;
-              font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Georgia, serif;
-              display: flex;
-              flex-direction: column;
-              align-items: center;
-              justify-content: center;
-              min-height: calc(100vh - 40px);
-              background-color: transparent;
-            }
-            * { box-sizing: border-box; }
-          </style>
-        </head>
-        <body>
-          <div style="width: 100%; max-width: 100%;">
-            ${state.code}
-          </div>
-        </body>
-        </html>
-      `);
-      doc.close();
+      const htmlContent = `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <style>
+    body {
+      margin: 0;
+      padding: 20px;
+      box-sizing: border-box;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Georgia, serif;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: calc(100vh - 40px);
+      background-color: transparent;
+    }
+    * { box-sizing: border-box; }
+  </style>
+</head>
+<body>
+  <div style="width: 100%; max-width: 100%;">
+    ${state.code}
+  </div>
+</body>
+</html>`;
+
+      // srcdoc avoids SecurityError on HTTPS sandboxed iframes
+      previewFrame.srcdoc = htmlContent;
     }
 
     // Set Device Preview Size
@@ -1005,7 +1026,7 @@
 
       try {
         const payload = JSON.stringify({ title, tags, code });
-        const encoded = btoa(unescape(encodeURIComponent(payload)));
+        const encoded = safeBtoa(payload);
         const shareUrl = `${window.location.origin}${window.location.pathname}#data=${encoded}`;
         shareLinkInput.value = shareUrl;
       } catch (err) {
